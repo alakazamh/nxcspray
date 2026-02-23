@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # Usage:
-#   nxcspray <protocols|all> <targets> -u <username> (-p <password> | -H <hash>) [--local-auth]
+#   nxcspray <protocols|all> <targets> -u <username> (-p <password> | -H <hash>) [--local-auth] [--continue-on-success]
 
 [ "$#" -lt 4 ] && {
-  echo "[-] Usage: $0 <protocols|all> <targets> -u <username> (-p <password> | -H <hash>) [--local-auth]"
+  echo "[-] Usage: $0 <protocols|all> <targets> -u <username> (-p <password> | -H <hash>) [--local-auth] [--continue-on-success]"
   exit 1
 }
 
@@ -16,6 +16,7 @@ USER=""
 PASS=""
 HASH=""
 LOCAL_AUTH=0
+CONTINUE_ON_SUCCESS=0
 
 # ---- Args parsing ----
 while [ "$#" -gt 0 ]; do
@@ -34,6 +35,10 @@ while [ "$#" -gt 0 ]; do
     ;;
   --local-auth)
     LOCAL_AUTH=1
+    shift
+    ;;
+  --continue-on-success)
+    CONTINUE_ON_SUCCESS=1
     shift
     ;;
   *)
@@ -73,13 +78,9 @@ else
 fi
 
 # ---- Capability checks ----
-supports_localauth() {
-  case "$1" in smb | ldap | winrm | rdp) return 0 ;; *) return 1 ;; esac
-}
-
-supports_hash() {
-  case "$1" in smb | ldap | winrm | rdp | mssql) return 0 ;; *) return 1 ;; esac
-}
+supports_localauth() { case "$1" in smb | ldap | winrm | rdp) return 0 ;; *) return 1 ;; esac }
+supports_hash() { case "$1" in smb | ldap | winrm | rdp | mssql) return 0 ;; *) return 1 ;; esac }
+supports_continue_on_success() { return 0; } # assume global support
 
 # ---- Spray Loop ----
 for PROTO in "${PROTO_ARRAY[@]}"; do
@@ -103,6 +104,10 @@ for PROTO in "${PROTO_ARRAY[@]}"; do
 
     if [ "$LOCAL_AUTH" -eq 1 ] && supports_localauth "$PROTO"; then
       CMD+=(--local-auth)
+    fi
+
+    if [ "$CONTINUE_ON_SUCCESS" -eq 1 ] && supports_continue_on_success "$PROTO"; then
+      CMD+=(--continue-on-success)
     fi
 
     "${CMD[@]}"
